@@ -1,259 +1,202 @@
-# Lab Assignment 4–5 Report: Advanced MLflow and Data Versioning with DVC
+# Lab Assignment 4–5: Advanced MLflow & Data Versioning with DVC
+
+* **Student:** Chirag Jindani
+* **Roll No:** 24AI020
+* **Course:** Machine Learning Operations (MLOps)
+* **Date:** October 17, 2026
+* **Repository:** [https://github.com/CHIRAG-JINDANI/mlops-lab-4-5](https://github.com/CHIRAG-JINDANI/mlops-lab-4-5)
 
 ---
 
-**Student Name:** Chirag Jindani  
-**Roll Number:** 24AI020  
-**Course:** Machine Learning Operations (MLOps)  
-**Date:** October 17, 2026  
-**Repository:** [https://github.com/CHIRAG-JINDANI/mlops-lab-4-5](https://github.com/CHIRAG-JINDANI/mlops-lab-4-5)  
+## 1. Project Overview & Objective
+
+In traditional software development, Git tracks everything needed to build and run an application. In machine learning, tracking the code alone isn't enough—the model's behavior depends heavily on the dataset version, random seeds, hyperparameters, and the exact training environment.
+
+This lab focuses on answering one central question:
+> **"Can another engineer identify which model is currently running in production, and easily retrieve the exact code and dataset version used to build it?"**
+
+To solve this, I built an end-to-end reproducible setup using three tools working together:
+1. **Git:** Versions the source code, configs, and lightweight metadata files (`.dvc`, `dvc.yaml`, `dvc.lock`).
+2. **DVC:** Handles the dataset versioning outside Git, caching data files in a local remote storage folder and letting us roll back data with simple checkout commands.
+3. **MLflow:** Tracks training runs, logs parameters and metrics ($MAE, RMSE, R^2$), saves visual artifacts, enforces input/output model signatures, and manages the model lifecycle in the Model Registry.
+
+For the dataset, I used the **California Housing dataset** (predicting median house values in \$100k units), training three different candidate architectures and tracking their lineage from start to finish.
 
 ---
 
-## Executive Summary
+## 2. Part A: Advanced MLflow (Lab 4)
 
-In production machine learning systems, reproducibility cannot rely solely on source code. Changes in dataset distributions, non-deterministic hyperparameter tuning, model serialization incompatibilities, and lack of metadata governance frequently lead to the "silent decay" of production systems. 
+### A1. Key MLflow Concepts Explained
 
-This laboratory report addresses the core engineering question:
-> **"Can another engineer identify the model that was deployed and recover the exact code and dataset version used to create it?"**
-
-By establishing a unified MLOps tri-pillar architecture combining **Git** (code and metadata versioning), **DVC** (data tracking, content-addressable storage, and pipelines), and **MLflow** (experiment tracking, artifacts, model signatures, and model registry governance), this project demonstrates complete bidirectional traceability from an active production inference endpoint back to its exact dataset snapshot and source commit.
-
----
-
-## Part A: Advanced MLflow (Lab 4)
-
-### A1. Self-Learning Research & Core Concepts
-
-#### 1. Model Signature
-* **Definition:** A formal specification defining the expected schema of the model's inputs and outputs, including column names, primitive data types (e.g., `double`, `integer`, `string`), and dimensional shapes (scalars or tensors).
-* **Practical Example:** In our California Housing regression model, the signature is inferred via `mlflow.models.infer_signature(X_train, y_pred)`. The input schema strictly requires eight 64-bit float features (`MedInc`, `HouseAge`, `AveRooms`, `AveBedrms`, `Population`, `AveOccup`, `Latitude`, `Longitude`), and the output schema enforces a 1D tensor of `float64` target predictions. If an inference payload supplies string representations or omits the `Latitude` coordinate, MLflow's pyfunc serving wrapper intercepts the request and throws a `400 Bad Request` schema validation error before computation reaches internal estimator code.
-
-#### 2. Artifacts
-* **Definition:** Heavy, non-scalar files generated during or after a model training run that provide diagnostics, model persistence, and deployment configuration.
-* **Practical Example:** In this project, each run generates and records:
-  1. Serialized model binaries and environment configurations (`model/model.pkl`, `MLmodel`, `requirements.txt`).
-  2. High-resolution diagnostic plots (`diagnostic_plots/residuals_plot.png`, `diagnostic_plots/actual_vs_predicted.png`, `diagnostic_plots/feature_importance.png`).
-  3. Structured evaluation reports (`reports/evaluation_report.json`).
-
-#### 3. Autologging
-* **Definition:** Framework-level introspection utilities (e.g., `mlflow.sklearn.autolog()`) that automatically intercept model training and log recognized hyperparameters, training/validation metrics, and model representations without explicit boilerplate logging calls.
-* **Empirical Verification:** When evaluating `mlflow.sklearn.autolog()`, we verified that it recorded estimator parameters (e.g., `alpha`, `fit_intercept`, `max_iter`), training execution time, and scikit-learn standard training metrics. However, autologging alone did not capture our specific operational requirements: DVC data hashes, custom residual plots, and explicit test-set evaluation under isolated splits. Consequently, a hybrid approach—pairing autologging with explicit metric/artifact logging—is required for production safety.
-
-#### 4. Model Registry
-* **Definition:** A centralized, database-backed catalog that manages the lifecycle of trained ML models. It provides a single namespace (e.g., `HousePriceModel`), sequential versioning (v1, v2, v3), metadata tagging, model descriptions, and lifecycle governance.
-* **Practical Example:** It isolates experimental scratch models from release candidates. While an experiment tracking run lives in `mlruns/` under an ephemeral Run ID, the Model Registry promotes validated runs to formal versions under `models:/HousePriceModel/`, decoupling inference clients from run identifiers.
-
-#### 5. Version versus Stage / Alias
-* **Version:** An immutable, monotonically increasing integer identifying a specific checkpoint/run of a registered model (e.g., `Version 1`, `Version 2`). A version's code, metrics, and weights never change.
-* **Stage / Alias:** A mutable, human-readable pointer indicating the operational role or deployment status of a model version. 
-  * *Classic MLflow Stages:* `Staging`, `Production`, `Archived`.
-  * *Modern MLflow Aliases:* Named tags such as `@candidate`, `@production`, `@archived`. While a version remains permanent for auditability, the `@production` alias shifts dynamically to newer, higher-performing versions without requiring client code changes.
+* **Model Signature:**
+  * *What it is:* A clear schema definition of what inputs a model expects (column names and data types like `double` or `string`) and what output it produces (e.g. continuous float or tensor).
+  * *Practical Example:* For our California housing models, the signature specifies that the model requires 8 numeric columns (`MedInc`, `HouseAge`, `AveRooms`, `AveBedrms`, `Population`, `AveOccup`, `Latitude`, `Longitude`) and outputs a 1D array of `float64`. If someone sends a request missing the `Latitude` field or passes a string instead of a float, MLflow catches this immediately with an HTTP 400 error before running `.predict()`.
+* **Artifacts:**
+  * *What they are:* Files generated during an experiment run that you want saved alongside your metrics. This includes trained model weights (`model.pkl`), diagnostic plots, configuration files, and evaluation reports.
+  * *In this lab:* For every run, I logged the serialized model pipeline, an evaluation summary JSON, and three plots: residuals plot, actual vs. predicted plot, and feature importances.
+* **Autologging:**
+  * *What it is:* A built-in MLflow feature (e.g. `mlflow.sklearn.autolog()`) that hooks into popular libraries and logs common parameters and metrics without writing lots of manual `mlflow.log_*` calls.
+  * *What it recorded for us:* It automatically logged Scikit-learn parameters (like `alpha` for Ridge, `n_estimators`, `max_depth`), training times, and training metrics. However, autologging didn't capture our custom DVC data hashes, Git commit SHAs, or isolated test-set diagnostic plots, so I used a hybrid approach: autologging for estimator basics, plus explicit logging for our audit tags and evaluation artifacts.
+* **Model Registry:**
+  * *What it is:* A centralized model store where trained models can be registered under a friendly name (e.g. `HousePriceModel`) with automatic versioning (v1, v2, v3), descriptions, tags, and deployment statuses.
+  * *Why it helps:* Instead of giving deployment engineers an obscure run ID like `d5f0fe90fb8a...`, we register the model and manage its lifecycle cleanly.
+* **Version vs. Stage / Alias:**
+  * A **Version** is permanent and immutable (e.g. Version 1, Version 2). Once created, its weights and metrics never change.
+  * A **Stage** (classic MLflow: `Staging`, `Production`, `Archived`) or **Alias** (modern MLflow: `@candidate`, `@production`, `@archived`) is a movable label indicating where the model is currently used. While Version 3 stays Version 3 forever, the `@production` alias can be shifted from Version 2 to Version 3 once Version 3 passes validation.
 
 ---
 
-### A2. Environment and Project Setup
+### A2 & A3. Experiment Tracking & Candidate Models
 
-The project environment was initialized using Python 3.14 on macOS Apple Silicon. Exact library versions were pinned to prevent runtime regressions:
+I trained three candidate models with different trade-offs:
+1. **Candidate 1 (`v1_ridge`):** Ridge regression baseline ($\alpha = 1.0$) with a `StandardScaler`. Simple, fast, and highly interpretable.
+2. **Candidate 2 (`v2_random_forest`):** Random Forest Regressor (100 trees, `max_depth=10`). Captures non-linear relationships and geographic pockets.
+3. **Candidate 3 (`v3_gradient_boosting`):** Gradient Boosting Regressor (200 trees, `learning_rate=0.08`, `max_depth=5`). Optimizes sequential errors for higher predictive accuracy.
 
-* **MLflow:** `3.17.1`
-* **DVC:** `3.67.1`
-* **Scikit-learn:** `1.9.1`
-* **Pandas:** `3.0.6`
-* **Matplotlib:** `3.11.2`
-* **Tracking Store:** SQLite (`sqlite:///mlflow.db`)
+Each run logged test evaluation metrics ($MAE$, $RMSE$, $R^2$) and saved two key visual diagnostics:
+* **Residuals Plot (`residuals_plot.png`):** Checks whether errors are symmetrically distributed around zero or if there is systematic bias.
+* **Actual vs. Predicted Plot (`actual_vs_predicted.png`):** Shows how closely predictions follow the ideal 45-degree line.
 
-```bash
-# Activation and environment reproduction
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+> 📸 **[SCREENSHOT 1: MLflow Runs Comparison Table]**  
+> *How to take it: Run `.venv/bin/mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000`, open `http://127.0.0.1:5000`, click on Experiment `California_House_Price_Prediction`, and capture the runs table showing `candidate_v1_ridge`, `candidate_v2_random_forest`, and `candidate_v3_gradient_boosting` along with their test metrics and tags.*
 
 ---
 
-### A3. Track and Compare Experiments
+### A4. Model Signatures & Input Examples
 
-Three candidate regression models were trained on the California Housing dataset to evaluate different trade-offs between model complexity, inference latency, and predictive accuracy:
+The model signature was inferred using `infer_signature(X_train, model.predict(X_train))` and logged alongside an input example (`X_train.head(5)`):
+* **Inputs:** 8 `double` columns (`MedInc`, `HouseAge`, `AveRooms`, `AveBedrms`, `Population`, `AveOccup`, `Latitude`, `Longitude`).
+* **Outputs:** 1D array of `float64` representing predicted house prices in \$100k units.
 
-1. **Candidate 1 (`v1_ridge`):** Regularized Linear Model (Ridge Regression with $L_2$ penalty, $\alpha = 1.0$) wrapped in a `StandardScaler` pipeline. Serves as a transparent linear baseline.
-2. **Candidate 2 (`v2_random_forest`):** Non-linear ensemble model (Random Forest Regressor, 100 estimators, max depth 10). Captures complex feature interactions and geographic boundaries.
-3. **Candidate 3 (`v3_gradient_boosting`):** Sequential boosting model (Gradient Boosting Regressor, 200 estimators, learning rate 0.08, max depth 5). Optimized for low residual variance.
-
-Each training run generated and logged two primary artifacts:
-* **Residual Analysis Plot (`residuals_plot.png`):** Evaluates homoscedasticity and detects non-linear systematic errors across the prediction range.
-* **Actual vs. Predicted Scatter Plot (`actual_vs_predicted.png`):** Measures dispersion around the ideal $y = x$ reference line.
-* **Feature Importance / Coefficient Bar Chart (`feature_importance.png`):** Identifies driving factors (e.g., `MedInc`, `AveOccup`, geographical coordinates).
-
-> 📸 **[SCREENSHOT PLACEHOLDER 1: MLflow Experiment Run Comparison Table]**  
-> *Instructions: Open MLflow UI at `http://127.0.0.1:5000`. Navigate to Experiment `California_House_Price_Prediction`. Select runs `candidate_v1_ridge`, `candidate_v2_random_forest`, and `candidate_v3_gradient_boosting`. Show the metrics columns (test_rmse, test_mae, test_r2_score) and Git/DVC tags.*
-
----
-
-### A4. Model Signatures and Input Examples
-
-#### Model Signature Specification
-The signature logged with each candidate model defines the schema:
-* **Inputs:**
-  * `MedInc`: `double` (Median income in block group)
-  * `HouseAge`: `double` (Median house age in block group)
-  * `AveRooms`: `double` (Average number of rooms per household)
-  * `AveBedrms`: `double` (Average number of bedrooms per household)
-  * `Population`: `double` (Block group population)
-  * `AveOccup`: `double` (Average household members)
-  * `Latitude`: `double` (Block group latitude)
-  * `Longitude`: `double` (Block group longitude)
-* **Outputs:** `Tensor('float64', (-1,))` (Continuous median house value in units of \$100,000)
-
-#### Discussion: Schema Enforcement and Limitations
-* **What happens if a future API sends 3 columns instead of 4, or alters a column data type?**  
-  Without a formal signature, a Scikit-learn estimator typically fails with an uninformative low-level error (e.g., `ValueError: X has 3 features, but RandomForestRegressor is expecting 8 features as input`), or worse, misaligns columns silently if an unindexed NumPy array is supplied. When an MLflow signature is enforced, the serving harness validates the incoming JSON/DataFrame payload before prediction. If a column is missing or a string is passed where a double is expected, MLflow intercepts the call and returns an explicit HTTP 400 error message specifying the exact missing/invalid feature.
+#### Discussion: Handling Bad Inputs
+* **What happens if a future API sends 3 columns instead of 4, or changes a column type?**  
+  Without a signature, Scikit-learn will typically crash with an ugly traceback like `ValueError: X has 3 features, but RandomForestRegressor is expecting 8 features`. Worse, if someone passes an unindexed NumPy array with columns in the wrong order, the model might make silent, completely wrong predictions without raising any error! With an MLflow signature attached, MLflow inspects the payload first. If a column is missing or types are mismatched, it immediately rejects the request with an HTTP 400 Bad Request and tells the client exactly which column failed.
 * **What can a signature detect, and what can it NOT guarantee?**  
-  * **Can detect:** Column presence/absence, name mismatches, wrong data types (e.g., string instead of float), and tensor dimensional rank mismatches.
-  * **Cannot guarantee:** Valid numeric ranges (e.g., negative `HouseAge`), semantic validity (e.g., latitude/longitude coordinates outside California), covariate shift, distribution drift, or adversarial data within valid numerical limits.
+  * **What it catches:** Missing columns, extra columns, misspelled column names, and mismatched data types (e.g. passing `"five"` instead of `5.0`).
+  * **What it cannot guarantee:** It cannot check if values make physical sense. For example, if someone passes a negative `HouseAge` ($-40$) or coordinates located in the middle of the Pacific Ocean, the signature sees valid floats and lets the request through. Detecting semantic drift or out-of-range values requires additional data validation tools (like Great Expectations or Pydantic validators).
 
-> 📸 **[SCREENSHOT PLACEHOLDER 2: MLflow Model Artifacts & Inferred Signature View]**  
-> *Instructions: In MLflow UI, click into the run for `candidate_v3_gradient_boosting`. Scroll to the Artifacts section, select the `model` folder, and capture the Schema tab showing Inputs, Outputs, and Model Signature.*
+> 📸 **[SCREENSHOT 2: Model Artifacts & Signature]**  
+> *How to take it: In the MLflow UI, click on the `candidate_v3_gradient_boosting` run, scroll down to Artifacts, click the `model` folder, and take a screenshot of the Schema tab showing Inputs, Outputs, and the Input Example.*
 
 ---
 
-### A5. Register Model Versions (v1, v2, v3)
+### A5. Model Registry Versions (v1, v2, v3)
 
-All three candidate models were registered under the single unified Model Registry name: `HousePriceModel`.
+All three candidate models were registered under the registered model name **`HousePriceModel`**:
 
-#### Model Registry Versions Comparison Table
-
-| Registered Version | Source Run ID | Test RMSE | Test MAE | Test $R^2$ | Architectural Changes & Description | Lifecycle Decision |
+| Version | Source Run ID | Test RMSE | Test MAE | Test $R^2$ | Model Details | Decision |
 | :---: | :---: | :---: | :---: | :---: | :--- | :--- |
-| **v1** | `1d0d1063df0f45169384d346e498575e` | **0.7530** | 0.5315 | 0.5715 | Linear Ridge baseline with standard scaling. Highly interpretable, low computational footprint. | **Archived / Retired** (Fails acceptance criteria RMSE $\le 0.65$; serves as historical baseline). |
-| **v2** | `6f1b24b2c0324526975b7f3bc867cbed` | **0.5428** | 0.3639 | 0.7774 | Random Forest Regressor (100 trees, depth 10). Non-linear spatial partitioning. | **Staging / Candidate** (Meets criteria; retained for staged load testing and fast rollback). |
-| **v3** | `d5f0fe90fb8a4ba4bd5a9f71eae961c6` | **0.4783** | **0.3175** | **0.8272** | Gradient Boosting Regressor (200 trees, lr 0.08, depth 5). Lowest variance. | **Production** (Superior performance across all metrics; promoted to active serving). |
+| **Version 1** | `1d0d1063df0f...` | 0.7530 | 0.5315 | 0.5715 | Ridge Regression baseline with StandardScaler. | **Archived / Retired** (High error; baseline). |
+| **Version 2** | `6f1b24b2c032...` | 0.5428 | 0.3639 | 0.7774 | Random Forest (100 trees, max depth 10). | **Staging / Candidate** (Meets criteria; good backup). |
+| **Version 3** | `d5f0fe90fb8a...` | **0.4783** | **0.3175** | **0.8272** | Gradient Boosting (200 trees, lr 0.08, depth 5). | **Production** (Best overall accuracy; promoted). |
 
-> 📸 **[SCREENSHOT PLACEHOLDER 3: MLflow Registered Models & Versions Overview]**  
-> *Instructions: In MLflow UI, click the "Models" tab in the top header. Select `HousePriceModel`. Capture the table listing Version 1, Version 2, and Version 3 with their aliases and lifecycle stages.*
+> 📸 **[SCREENSHOT 3: Model Registry Versions Overview]**  
+> *How to take it: Click on the "Models" tab at the top of MLflow UI, click `HousePriceModel`, and take a screenshot showing Version 1 (Archived), Version 2 (Staging), and Version 3 (Production).*
 
 ---
 
-### A6. Model Lifecycle Management: Staging, Production, and Archived
+### A6. Lifecycle Management: Staging, Production, and Archived
 
-#### 1. Promotion Acceptance Rule
-An automated threshold was established in `configs/config.yaml`:
-* **Acceptance Rule:** A model candidate is eligible for promotion if and only if **$\text{Test RMSE} \le 0.65$** (equivalent to an error bound under \$65,000) and **$R^2 \ge 0.70$**.
+#### Promotion Acceptance Rule
+In `configs/config.yaml`, I defined an explicit rule before promoting any model to production:
+* **Rule:** A candidate must achieve **$\text{Test RMSE} \le 0.65$** (error under \$65,000) and **$R^2 \ge 0.70$**.
 
-#### 2. Evidence-Based Lifecycle Transition Record
+#### Lifecycle Status Record
 
-| Lifecycle State | Target Version | Evidence / Justification | Operational Action Taken |
+| Lifecycle State | Version | Reason & Evidence | Action Taken |
 | :--- | :---: | :--- | :--- |
-| **Production** | **Version 3** | Achieved Test RMSE of **0.4783** (well below the 0.65 threshold) and $R^2$ of **0.8272**. Best generalization on unseen data. | Assigned alias `@production`, transitioned stage to `Production`. |
-| **Staging / Candidate** | **Version 2** | Test RMSE of **0.5428** meets acceptance threshold. Retained for shadow validation and rollback buffer. | Assigned alias `@candidate`, transitioned stage to `Staging`. |
-| **Archived / Retired** | **Version 1** | Test RMSE of **0.7530** exceeds threshold (> 0.65) due to linear model underfitting spatial complexities. | Assigned alias `@archived`, transitioned stage to `Archived`. |
+| **Production** | **v3** | Test RMSE is **0.4783** (well below 0.65) and $R^2$ is **0.8272**. Best predictive performance on the test set. | Assigned alias `@production` and stage `Production`. |
+| **Staging / Candidate** | **v2** | Test RMSE is **0.5428**, meeting the threshold. Retained as a validated fallback. | Assigned alias `@candidate` and stage `Staging`. |
+| **Archived / Retired** | **v1** | Test RMSE is **0.7530**, failing the threshold due to linear underfitting. | Assigned alias `@archived` and stage `Archived`. |
 
-#### 3. Client Production Model Retrieval
-Teammates and deployment pipelines retrieve the active production model without hardcoding run IDs or version numbers:
+#### How a Teammate Retrieves the Production Model
+Anyone on the team can load the current production model without having to know which run or version ID is live:
 ```python
 import mlflow.pyfunc
 
-# Retrieve production model dynamically using alias or stage
 mlflow.set_tracking_uri("sqlite:///mlflow.db")
-production_model = mlflow.pyfunc.load_model("models:/HousePriceModel@production")
-predictions = production_model.predict(new_housing_features)
+# Load model dynamically via alias
+model = mlflow.pyfunc.load_model("models:/HousePriceModel@production")
+predictions = model.predict(new_data)
 ```
 
-#### 4. Critical Thinking: Should the highest-accuracy model always be promoted?
-**No.** Relying exclusively on aggregate accuracy (or minimum RMSE) introduces significant operational hazards:
-1. **Inference Latency & SLAs:** An ensemble with hundreds of deep trees may achieve a 1% RMSE improvement but require 50ms inference time compared to 2ms for a simpler model, violating client-facing SLAs.
-2. **Subgroup Disparities & Fairness:** An aggregate metric can conceal severe prediction errors across specific demographic or geographic subsets (e.g., lower-income housing blocks).
-3. **Overfitting & Fragility:** Hyper-tuned models often fit noise in the test split, degrading rapidly when production data undergoes covariate shift.
-4. **Error Asymmetry:** In real estate appraisal, predicting a house value as \$200,000 when it is worth \$400,000 carries fundamentally different financial consequences than an overestimate of the same magnitude.
+#### Critical Thinking: Should the highest-accuracy model always be promoted?
+**Not necessarily.** Picking a model solely on the lowest test RMSE can backfire for several practical reasons:
+1. **Inference Latency & SLAs:** An ensemble of hundreds of deep trees or a huge neural net might take 60ms to predict, while a simpler model takes 2ms. If the user-facing API has a 20ms SLA, the "better" model can't be used.
+2. **Subgroup Disparities:** A model might look great on average across California, but perform terribly on specific lower-income counties or rural zip codes. We need to evaluate subgroup metrics before shipping.
+3. **Overfitting to Test Split:** Highly flexible models might be tuning into quirks of the test set that won't hold up in production.
+4. **Different Costs of Errors:** In house pricing, underestimating a home value by \$100k might lose a customer, while overestimating might cause the property to sit on the market for months. If error costs are asymmetric, RMSE alone doesn't reflect real business impact.
 
 ---
 
-## Part B: Data Versioning with DVC (Lab 5)
+## 3. Part B: Data Versioning with DVC (Lab 5)
 
-### B1. Self-Learning Research: Data Versioning Mechanics
+### B1. Why DVC? Core Concepts
 
-#### 1. Why Git is unsuitable for large datasets or frequent binary changes
-Git uses directed acyclic graphs (DAGs) and packfile compression designed for human-readable text diffs. When tracking large binary files (e.g., CSVs, HDF5, model checkpoints), every minor alteration causes Git to store a complete new snapshot of the binary blob in `.git/objects`. This leads to rapid repository bloat, painfully slow clones, memory exhaust during local diffs, and failures against remote hosting quotas (such as GitHub's 100MB file limit).
-
-#### 2. What DVC tracks in Git vs. what is stored in the data remote
-* **In Git:** DVC commits tiny, human-readable ASCII metadata files (`.dvc` files and `dvc.lock`). These files contain only content hashes (MD5), file sizes, and destination paths.
-* **In the Remote Storage:** DVC stores the actual raw data payloads organized in a content-addressable storage structure (e.g., `../dvc-storage/files/md5/ca/5b757f0729c68d74d05bf9d9ca8486`).
-
-#### 3. What a `.dvc` file represents
-A `.dvc` file is a pointer metadata file. It serves as an immutable bridge linking a Git commit to a specific binary object in external storage. For example, `data/dataset.csv.dvc` contains:
-```yaml
-outs:
-- md5: ca5b757f0729c68d74d05bf9d9ca8486
-  size: 1895154
-  hash: md5
-  path: dataset.csv
-```
-
-#### 4. Git Commit vs. DVC Data Version
-* A **Git Commit** captures a point-in-time snapshot of the source code, directory structure, configurations, and `.dvc` metadata files.
-* A **DVC Data Version** represents the actual physical state of the dataset identified by its content-derived MD5 hash. Checking out a Git commit automatically checks out the corresponding `.dvc` pointer, allowing `dvc checkout` to restore the exact dataset version matching that code.
-
-#### 5. Role of DVC Remotes
-A DVC remote provides centralized, shared object storage (local shared disk, AWS S3, Google Cloud Storage, Azure Blob, or SSH server). It ensures team members can push and pull datasets without burdening Git, preventing "data silos" on individual developer machines.
+* **Why Git isn't suited for large datasets:** Git tracks every change by saving compressed snapshots inside `.git/objects`. If you track a 500 MB CSV and edit a few rows, Git saves another 500 MB blob. The repository quickly becomes huge, cloning takes forever, and services like GitHub reject files over 100 MB.
+* **What DVC does instead:** DVC leaves Git to do what it's good at (tracking code and small text files) while DVC manages the heavy data. DVC computes a unique MD5 hash of your dataset, moves the raw file to cache or remote storage, and leaves behind a tiny 4-line text pointer file (e.g. `data/dataset.csv.dvc`).
+* **Git commit vs. DVC version:** A Git commit snapshots your scripts and the `.dvc` text pointer. The DVC version is the actual physical file sitting in your remote storage matching that MD5 hash.
+* **DVC remote:** A shared storage location (like a local folder, S3 bucket, or Google Drive) where team members push and pull datasets, so everyone has access to the exact data version without sending gigabytes through Git.
 
 ---
 
-### B2 & B3. DVC Initialization and Tracking
+### B2 & B4. Setup & Local Remote Configuration
 
-1. **Initialization:** Initialized DVC inside the Git repository using `dvc init`. This created `.dvc/.gitignore`, `.dvc/config`, and `.dvcignore`.
-2. **Dataset Tracking:** Baseline data was generated at `data/dataset.csv`.
-3. **Tracking Command:**
+1. Initialized DVC inside the repository:
    ```bash
-   dvc add data/dataset.csv
+   dvc init
    ```
-   DVC calculated the MD5 hash (`ca5b757f...`), moved the physical file to the local cache (`.dvc/cache/`), replaced the working copy, created `data/dataset.csv.dvc`, and automatically added `/dataset.csv` to `data/.gitignore`.
-4. **Git Commit:** The metadata file `data/dataset.csv.dvc` and updated `.gitignore` files were committed to Git (`6767005`), ensuring Git tracks only 94 bytes of metadata rather than 1.89 MB of raw CSV data.
+2. Set up a local directory remote outside the git repo at `../dvc-storage`:
+   ```bash
+   mkdir -p ../dvc-storage
+   dvc remote add -d localremote ../dvc-storage
+   git add .dvc/config
+   git commit -m "Configure DVC remote"
+   ```
 
 ---
 
-### B4. Storage Configuration and Push
+### B5 & B6. Tracking, Modifying, and Recovering Data
 
-A local remote storage directory was established outside the repository at `../dvc-storage`:
-```bash
-mkdir -p ../dvc-storage
-dvc remote add -d localremote ../dvc-storage
-git add .dvc/config
-git commit -m "Configure DVC remote"
-dvc push
-```
-The `.dvc/config` file was committed to Git, enabling any collaborator cloning the repository to pull the data directly.
-
----
-
-### B5 & B6. Dataset Versioning, Recovery, and Comparison
-
-To demonstrate data evolution and recovery:
-1. **Dataset v1 (Baseline):** 20,640 rows, 9 columns. Committed to Git (`6767005`) and pushed to DVC remote.
-2. **Dataset v2 (Controlled Evolution):** Appended 100 realistic synthetic survey records with geographical jitter (20,740 rows). Re-ran `dvc add data/dataset.csv`, committed `data/dataset.csv.dvc` (`666c6cd`), and pushed to remote.
-3. **Recovery Verification:**
-   * Switched Git to commit `6767005` on a temporary branch `verify-v1`.
-   * Executed `dvc checkout`.
-   * Verified row count (`wc -l data/dataset.csv`), confirming exact restoration to **20,641 lines** (1 header + 20,640 records) and MD5 hash `ca5b757f0729c68d74d05bf9d9ca8486`.
-   * Switched back to `main` branch (`666c6cd`) and executed `dvc checkout`, successfully returning to **20,741 lines** and MD5 hash `5968e75c88d31ad1a1083b00d57fba4e`.
+To test data versioning and recovery:
+1. **Dataset v1 (Baseline):** Generated the California Housing dataset with 20,640 rows.
+   ```bash
+   python src/prepare_data.py --version v1
+   dvc add data/dataset.csv
+   git add data/dataset.csv.dvc data/.gitignore
+   git commit -m "Track dataset v1 with DVC"
+   dvc push
+   ```
+2. **Dataset v2 (Controlled Evolution):** Simulated new survey entries by appending 100 realistic records (20,740 rows).
+   ```bash
+   python src/prepare_data.py --version v2
+   dvc add data/dataset.csv
+   git add data/dataset.csv.dvc
+   git commit -m "Update dataset to v2 (added 100 survey samples)"
+   dvc push
+   ```
 
 #### Dataset Version Comparison Table
 
-| Version | Git Commit | Row Count | Column Count | File Size (Bytes) | DVC MD5 Hash | Change Description | Restoration Verified? |
+| Version | Git Commit | Rows | Columns | File Size | DVC MD5 Hash | Change Description | Restored & Verified? |
 | :---: | :---: | :---: | :---: | :---: | :--- | :--- | :---: |
-| **Dataset v1** | `6767005` | 20,640 | 9 | 1,895,154 | `ca5b757f0729c68d74d05bf9d9ca8486` | Baseline California Housing dataset (8 features + target). | **Yes** (Row count 20,640 & hash verified via `dvc checkout`). |
-| **Dataset v2** | `666c6cd` | 20,740 | 9 | 1,903,729 | `5968e75c88d31ad1a1083b00d57fba4e` | Added 100 new survey samples with geographic and economic jitter. | **Yes** (Row count 20,740 & hash verified on `main`). |
+| **Dataset v1** | `6767005` | 20,640 | 9 | 1,895,154 B | `ca5b757f0729c68d74d05bf9d9ca8486` | Baseline California Housing data. | **Yes** (Row count 20,640 & hash match). |
+| **Dataset v2** | `666c6cd` | 20,740 | 9 | 1,903,729 B | `5968e75c88d31ad1a1083b00d57fba4e` | Appended 100 new survey samples. | **Yes** (Row count 20,740 verified on main). |
 
-#### Question: How did you verify that DVC restored the intended version? Why is a filename alone insufficient?
-* **Verification Method:** Verified using two independent properties:
-  1. **Line Count:** Using `wc -l data/dataset.csv` to ensure exact match with the target version's record count (20,641 vs. 20,741).
-  2. **Cryptographic Hash:** Verified that the MD5 content hash matched the exact value recorded in `data/dataset.csv.dvc`.
-* **Why Filename is Insufficient:** In file systems, filenames are arbitrary mutable pointers. A file named `dataset.csv` can undergo schema modifications, row deletions, or data corruption without the filename changing. Without cryptographic content hashing (MD5/SHA256) linked to version control, it is impossible to guarantee that two runs referencing `dataset.csv` were trained on identical observations.
+#### How I Verified the Restoration
+To prove that DVC actually restored the old version:
+1. Checked out the v1 commit into a temporary branch: `git checkout -b verify-v1 6767005`
+2. Ran `dvc checkout` to pull the matching data from cache.
+3. Ran `wc -l data/dataset.csv` $\rightarrow$ exactly **20,641 lines** (1 header + 20,640 data rows).
+4. Switched back to `main` (`git checkout main`) and ran `dvc checkout` $\rightarrow$ verified row count returned to **20,741 lines**.
+
+*Why filename alone isn't enough:* A file named `dataset.csv` could have rows added, deleted, or corrupted without the filename changing at all. Only cryptographic checksums (MD5) linked with Git commits guarantee you're training on the exact same data.
 
 ---
 
 ### B7. DVC Pipelines (`dvc.yaml`)
 
-A multi-stage reproducible pipeline was created in `dvc.yaml`:
+I created a pipeline stage in `dvc.yaml` that connects the dataset to model training:
 ```yaml
 stages:
   train_and_evaluate:
@@ -268,8 +211,7 @@ stages:
           cache: false
 ```
 
-#### Pipeline Inspection & DAG
-Running `dvc dag` visualizes the dependency graph:
+When you run `dvc dag`, DVC displays the dependency flow:
 ```
 +----------------------+ 
 | data/dataset.csv.dvc | 
@@ -282,120 +224,106 @@ Running `dvc dag` visualizes the dependency graph:
  +--------------------+  
 ```
 
-#### Execution and Caching:
-* Executing `dvc repro` executes the pipeline end-to-end, writing intermediate checksums to `dvc.lock`.
-* Re-executing `dvc repro` immediately outputs:
-  ```
-  'data/dataset.csv.dvc' didn't change, skipping
-  Stage 'train_and_evaluate' didn't change, skipping
-  Data and pipelines are up to date.
-  ```
-  DVC detects that no input dependencies or code files changed, avoiding redundant training.
+When running `dvc repro`, DVC executes the training stage and saves the exact dependency hashes to `dvc.lock`. If you run `dvc repro` again without modifying the data, config, or code, DVC skips execution:
+```
+Stage 'train_and_evaluate' didn't change, skipping
+Data and pipelines are up to date.
+```
 
 ---
 
-## Part C: Integrating Git, DVC, and MLflow
+## 4. Part C: Integrating Git, DVC, and MLflow
 
-### C1. Tool Integration Architecture
+### C1. Tool Responsibilities Summary
 
-The following matrix explains how Git, DVC, and MLflow complement one another without functional overlap:
-
-| Tool | What it Tracks / Records | Where Information Lives | Why It Matters |
+| Tool | What It Tracks | Where It Lives | Why It Matters |
 | :--- | :--- | :--- | :--- |
-| **Git** | Source code, configuration files (`configs/config.yaml`), documentation, and lightweight metadata pointers (`.dvc` files, `dvc.yaml`, `dvc.lock`). | `.git/` repository (local & GitHub/GitLab). | Guarantees code history reproducibility; acts as the single source of truth connecting data hashes to pipeline logic. |
-| **DVC** | Large raw datasets, intermediate feature matrices, model binaries (optional), and pipeline execution DAGs. | Local cache (`.dvc/cache`) & remote storage (`../dvc-storage`, S3, GCS). | Prevents repository bloat while providing content-addressable data versioning and intelligent pipeline caching. |
-| **MLflow** | Dynamic experiment tracking, model hyperparameters, evaluation metrics ($MAE, RMSE, R^2$), visual artifacts, model signatures, and Model Registry governance. | Database (`sqlite:///mlflow.db`) & artifact root (`mlartifacts/` or `mlruns/`). | Enables empirical model comparison, audit logging, and decoupled operational lifecycle promotion (`@production`). |
+| **Git** | Code, configs, and `.dvc` pointer files. | `.git/` folder and GitHub. | Gives a clear commit history connecting code to data pointers. |
+| **DVC** | The raw dataset files and pipeline DAG. | `.dvc/cache` and `../dvc-storage`. | Stops large datasets from bloating Git while ensuring exact data rollbacks. |
+| **MLflow** | Experiment metrics, parameters, artifacts, and model stages. | `sqlite:///mlflow.db` and `mlartifacts/`. | Tracks experiment history, logs signatures, and manages the `@production` model. |
 
 ---
 
-### C2. End-to-End Auditability & Traceability
+### C2. End-to-End Lineage: Audit Tags in MLflow
 
-In `src/train.py`, each training execution automatically queries Git and DVC to stamp every MLflow run with full audit metadata:
-
+To make sure everything is connected, `src/train.py` automatically injects the current Git commit SHA and DVC dataset MD5 hash into every MLflow run as tags:
 ```python
-# Part C Traceability Tags injected during run execution
 mlflow.set_tag("git_commit_sha", get_git_commit_sha())
 mlflow.set_tag("dvc_dataset_hash", get_dvc_data_hash())
-mlflow.set_tag("dataset_version_path", "data/dataset.csv")
+mlflow.set_tag("model_variant", candidate_key)
 mlflow.set_tag("dataset_rows", str(len(df)))
 ```
 
-> 📸 **[SCREENSHOT PLACEHOLDER 4: MLflow Run Tags Displaying Git Commit and DVC Hash]**  
-> *Instructions: In MLflow UI, open the run details for `candidate_v3_gradient_boosting`. Expand the "Tags" section and capture the tags showing `git_commit_sha`, `dvc_dataset_hash`, `model_variant`, and `dataset_rows`.*
+> 📸 **[SCREENSHOT 4: MLflow Tags with Git and DVC Hashes]**  
+> *How to take it: Click on the `candidate_v3_gradient_boosting` run in the MLflow UI, expand the "Tags" section, and capture the tags showing `git_commit_sha`, `dvc_dataset_hash`, and `dataset_rows`.*
 
 ---
 
-### C3. Scenario Walkthrough: Investigating an Anomaly in Production
+### C3. Scenario Walkthrough: Debugging a Production Anomaly
 
-Suppose a production client flags an unexpected price prediction on a California property. How does a teammate investigate and reproduce the exact model state?
+Imagine a client flags an odd prediction from our production model on a house in San Francisco. Here is the exact step-by-step process any engineer can follow to investigate:
 
-```mermaid
-flowchart LR
-    A["Production Prediction"] --> B["MLflow Model Registry<br/>(models:/HousePriceModel@production)"]
-    B --> C["Model Version 3<br/>(Run ID: d5f0fe90fb8a...)"]
-    C --> D["MLflow Tags<br/>Git SHA: 666c6cd8<br/>DVC Hash: 5968e75c..."]
-    D --> E["Git Checkout<br/>git checkout 666c6cd8"]
-    D --> F["DVC Checkout<br/>dvc checkout"]
-    E --> G["Exact Code Restored"]
-    F --> H["Exact Dataset Restored"]
-    G & H --> I["Identical Diagnostic Environment<br/>100% Reproducibility"]
+```
+[Production Model: HousePriceModel@production]
+                     │
+                     ▼
+          MLflow Version 3 (Run ID: d5f0fe90...)
+                     │
+         ┌───────────┴───────────┐
+         ▼                       ▼
+Git SHA: 666c6cd8        DVC Hash: 5968e75c
+         │                       │
+         ▼                       ▼
+ git checkout 666c6cd8      dvc checkout
+         │                       │
+         └───────────┬───────────┘
+                     ▼
+        [Identical Code & Data Restored]
+                     ▼
+      python src/evaluate.py --model-uri ...
 ```
 
-#### Step-by-Step Investigation Workflow:
-1. **Identify Production Version:**  
-   Query MLflow to determine which model version is serving production:
-   ```bash
-   python -c "import mlflow; client = mlflow.MlflowClient('sqlite:///mlflow.db'); print(client.get_model_version_by_alias('HousePriceModel', 'production'))"
-   ```
-   *Output confirms:* Version 3, Run ID `d5f0fe90fb8a4ba4bd5a9f71eae961c6`.
-
-2. **Extract Lineage Metadata from MLflow Tags:**  
-   Inspect Run ID `d5f0fe90fb8a...` tags:
+1. **Find the live model:** Query the registry: `models:/HousePriceModel@production` $\rightarrow$ identifies Version 3 (Run ID `d5f0fe90fb8a...`).
+2. **Read the audit tags:** Look at the run's tags in MLflow:
    * `git_commit_sha`: `666c6cd8204c03ae33546720b162db4fbdc6bca2`
    * `dvc_dataset_hash`: `5968e75c88d31ad1a1083b00d57fba4e`
-
-3. **Restore Exact Code State:**  
-   ```bash
-   git checkout 666c6cd8204c03ae33546720b162db4fbdc6bca2
-   ```
-
-4. **Restore Exact Dataset State:**  
-   ```bash
-   dvc checkout
-   ```
-   DVC reads `data/dataset.csv.dvc`, retrieves blob `5968e75c...` from local/remote storage, and reconstitutes the exact 20,740-row dataset used during training.
-
-5. **Local Prediction Reproduction & Debugging:**  
-   Run the evaluation script against the test sample:
-   ```bash
-   python src/evaluate.py --model-uri "models:/HousePriceModel@production"
-   ```
-   The engineer has now reproduced the exact execution environment, weights, feature splits, and data distributions, enabling conclusive root-cause analysis.
+3. **Restore the code:** Run `git checkout 666c6cd8204c...`
+4. **Restore the dataset:** Run `dvc checkout` (DVC reads the pointer and retrieves the exact 20,740-row CSV from cache).
+5. **Reproduce the prediction:** Run `python src/evaluate.py --model-uri "models:/HousePriceModel@production"`.  
+   We are now running the exact model weights on the exact data it was trained on, with zero guesswork.
 
 ---
 
-## Challenges Encountered and Resolutions
+## 5. Real Challenges Encountered & How I Fixed Them
 
-| # | Challenge Encountered | Root Cause | Engineering Resolution |
-| :-: | :--- | :--- | :--- |
-| **1** | Pip installation failure with `pyarrow` and `pygit2` on Python 3.15. | Python 3.15 development build lacked pre-compiled binary wheels on PyPI, triggering C-extension builds requiring missing `libgit2` headers. | Recreated the virtual environment with Homebrew Python 3.14 (`/opt/homebrew/bin/python3.14`), which features pre-compiled wheels for macOS Apple Silicon. |
-| **2** | MLflow model logging exception: `skops.io.exceptions.UntrustedTypesFoundException: Untrusted types found: ['sklearn.tree._tree.Tree']`. | MLflow 3.x defaults to `skops` serialization format, which restricts unpickling of tree node memory structures unless explicitly trusted. | Explicitly configured `serialization_format="cloudpickle"` in `mlflow.sklearn.log_model()`, safely packaging tree estimators within the secure tracking environment. |
-| **3** | DVC output conflict: `ERROR: output 'data/dataset.csv' is specified in data/dataset.csv.dvc and prepare stage`. | DVC strictly enforces single-ownership per artifact path; a path cannot be simultaneously tracked via `.dvc` file and as an output of a `dvc.yaml` stage. | Restructured `dvc.yaml` to declare `data/dataset.csv` strictly as an input dependency (`deps`), scoping stage outputs to generated reports and evaluation figures. |
-| **4** | MLflow Model Registry requirement for database-backed tracking store. | MLflow's default file-based storage (`./mlruns`) does not support full lifecycle stage transitions or alias management. | Configured SQLite backend (`sqlite:///mlflow.db`) across all scripts and configuration files, enabling complete Model Registry functionality. |
-
----
-
-## Conclusion & Key Takeaways
-
-1. **Code is Not Enough:** Full reproducibility in production machine learning requires versioning three distinct facets simultaneously: code, data, and model metadata.
-2. **Specialized Tooling Prevents Fragility:** Using Git for source code, DVC for binary data, and MLflow for runtime artifacts and lifecycle state avoids bloat while guaranteeing auditability.
-3. **Traceability Enables Accountability:** By binding Git commit hashes and DVC content checksums into MLflow run tags, production models become fully auditable artifacts that can be debugged, validated, and rolled back with complete confidence.
+1. **Python 3.15 Wheel Incompatibilities:**  
+   * *Problem:* When first setting up the virtual environment with the default Python 3.15 binary, `pip install pyarrow pygit2` failed because Python 3.15 is very new and pre-compiled wheels were not available on PyPI, causing it to fail while trying to compile `libgit2` from source.
+   * *Fix:* Created the virtual environment using Homebrew's Python 3.14 (`/opt/homebrew/bin/python3.14`), where pre-compiled wheels for macOS Apple Silicon installed cleanly.
+2. **MLflow 3.x Tree Serialization Security Warning:**  
+   * *Problem:* Logging Scikit-learn tree models with `mlflow.sklearn.log_model()` failed with `skops.io.exceptions.UntrustedTypesFoundException: Untrusted types found: ['sklearn.tree._tree.Tree']`. MLflow 3.x defaults to `skops` format which restricts unpickling tree nodes.
+   * *Fix:* Added `serialization_format="cloudpickle"` inside `log_model()`, allowing standard serialized tree ensembles to save without errors.
+3. **DVC Pipeline Output Clash:**  
+   * *Problem:* When setting up `dvc.yaml`, DVC threw `ERROR: output 'data/dataset.csv' is specified in data/dataset.csv.dvc and prepare stage`. DVC doesn't allow a file to be both tracked by a `.dvc` file and produced by a `dvc.yaml` stage.
+   * *Fix:* Kept `data/dataset.csv.dvc` as the data tracker and made `data/dataset.csv` a dependency (`deps`) of the training stage, writing stage outputs to `reports/figures`.
+4. **Model Registry SQLite Requirement:**  
+   * *Problem:* MLflow's default file-based storage (`./mlruns`) doesn't support the full Model Registry with aliases and stage transitions.
+   * *Fix:* Configured `sqlite:///mlflow.db` as the tracking URI, which provides full Model Registry features locally on disk.
 
 ---
 
-## References
+## 6. Conclusion
 
-1. **MLflow Documentation:** *Model Tracking, Signatures, and Model Registry Governance.* [https://mlflow.org/docs/latest/](https://mlflow.org/docs/latest/)
-2. **DVC (Data Version Control) Documentation:** *Data Versioning, Remotes, and Pipelines.* [https://dvc.org/doc](https://dvc.org/doc)
-3. **Scikit-learn Documentation:** *California Housing Dataset & Model Persistence.* [https://scikit-learn.org/stable/](https://scikit-learn.org/stable/)
-4. **Sculley, D., et al. (2015):** *Hidden Technical Debt in Machine Learning Systems.* Advances in Neural Information Processing Systems (NeurIPS).
+Setting up Git, DVC, and MLflow together took some initial plumbing, but the payoff is huge. Instead of having messy folders with names like `model_final_v2_really_final.pkl` and `data_clean_new.csv`, we have:
+* An immutable history of every dataset change in DVC.
+* An experiment tracking dashboard in MLflow with metrics, plots, and signatures.
+* An unambiguous Model Registry where `@production` always points to the best validated model.
+* Total traceability: any production model can be traced back to its Git commit and dataset hash in minutes.
+
+---
+
+## 7. References
+
+1. MLflow Documentation: [https://mlflow.org/docs/latest/](https://mlflow.org/docs/latest/)
+2. DVC Documentation: [https://dvc.org/doc](https://dvc.org/doc)
+3. Scikit-learn California Housing: [https://scikit-learn.org/stable/modules/generated/sklearn.datasets.fetch_california_housing.html](https://scikit-learn.org/stable/modules/generated/sklearn.datasets.fetch_california_housing.html)
+4. D. Sculley et al., *"Hidden Technical Debt in Machine Learning Systems"*, NeurIPS 2015.

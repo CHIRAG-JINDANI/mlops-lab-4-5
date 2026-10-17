@@ -1,0 +1,26 @@
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# MLflow
+mlruns/
+mlartifacts/
+.mlflow/
+
+# DVC local storage & cache
+.dvc/cache/
+.dvc/tmp/
+.cache/
+
+
+# OS artifacts
+.DS_Store
+Thumbs.db

@@ -1,0 +1,35 @@
+data:
+  raw_path: "data/dataset.csv"
+  target_column: "MedHouseVal"
+  test_size: 0.2
+  random_state: 42
+
+mlflow:
+  experiment_name: "California_House_Price_Prediction"
+  registered_model_name: "HousePriceModel"
+  tracking_uri: "sqlite:///mlflow.db"
+
+promotion:
+  target_metric: "rmse"
+  direction: "minimize"
+  acceptance_threshold: 0.65
+  candidate_stage: "Staging"
+  production_stage: "Production"
+  retired_stage: "Archived"
+
+candidates:
+  v1_ridge:
+    model_type: "Ridge"
+    alpha: 1.0
+    random_state: 42
+  v2_random_forest:
+    model_type: "RandomForestRegressor"
+    n_estimators: 100
+    max_depth: 10
+    random_state: 42
+  v3_gradient_boosting:
+    model_type: "GradientBoostingRegressor"
+    n_estimators: 200
+    learning_rate: 0.08
+    max_depth: 5
+    random_state: 42

@@ -1,0 +1,11 @@
+stages:
+  train_and_evaluate:
+    cmd: python3 src/train.py --candidate all
+    deps:
+      - configs/config.yaml
+      - data/dataset.csv
+      - src/train.py
+      - src/evaluate.py
+    outs:
+      - reports/figures:
+          cache: false

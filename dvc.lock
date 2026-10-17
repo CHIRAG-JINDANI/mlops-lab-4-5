@@ -1,0 +1,27 @@
+schema: '2.0'
+stages:
+  train_and_evaluate:
+    cmd: python3 src/train.py --candidate all
+    deps:
+    - path: configs/config.yaml
+      hash: md5
+      md5: 2ae0c6ec5da729ce9fcd424aa30cd0f7
+      size: 786
+    - path: data/dataset.csv
+      hash: md5
+      md5: 5968e75c88d31ad1a1083b00d57fba4e
+      size: 1903729
+    - path: src/evaluate.py
+      hash: md5
+      md5: 0a984ae1a01213215f77a226929ecd0e
+      size: 4202
+    - path: src/train.py
+      hash: md5
+      md5: ab32c057ccb59e595de8b77f23ddd00f
+      size: 13321
+    outs:
+    - path: reports/figures
+      hash: md5
+      md5: 8e8e30fd954cf87d43853d7192b0959a.dir
+      size: 3852897
+      nfiles: 12

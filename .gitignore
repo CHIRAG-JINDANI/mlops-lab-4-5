@@ -14,6 +14,9 @@ __pycache__/
 mlruns/
 mlartifacts/
 .mlflow/
+mlflow.db
+mlflow.db*
+
 
 # DVC local storage & cache
 .dvc/cache/

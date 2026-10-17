@@ -12,7 +12,10 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
@@ -188,15 +191,15 @@ def train_candidate(candidate_key: str, cfg: dict, register: bool = True):
         signature = infer_signature(X_train, model_pipeline.predict(X_train))
 
         # Log Model with Signature & Input Example
-        model_artifact_path = "model"
         registered_model_name = mlflow_cfg["registered_model_name"] if register else None
 
         mlflow.sklearn.log_model(
             sk_model=model_pipeline,
-            artifact_path=model_artifact_path,
+            name="model",
             signature=signature,
             input_example=input_example,
             registered_model_name=registered_model_name,
+            serialization_format="cloudpickle",
         )
 
         print(f"Logged model with signature:\nInputs: {signature.inputs}\nOutputs: {signature.outputs}")
@@ -255,14 +258,13 @@ def manage_model_lifecycle(cfg: dict):
         if item == best_candidate and rmse <= promo_cfg["acceptance_threshold"]:
             action = "Promoting to Production"
             decision_desc = f"Accepted: RMSE {rmse:.4f} meets threshold <= {promo_cfg['acceptance_threshold']}. Best candidate variant {variant}."
-            # Set alias (modern MLflow) and stage (classic MLflow)
             try:
                 client.set_registered_model_alias(model_name, "production", v)
             except Exception as e:
                 print(f"Note on setting alias: {e}")
             try:
                 client.transition_model_version_stage(
-                    name=model_name, version=v, stage=promo_cfg["production_stage"], archive_existing_versions=True
+                    name=model_name, version=v, stage=promo_cfg["production_stage"], archive_existing_versions=False
                 )
             except Exception as e:
                 print(f"Note on stage transition: {e}")
@@ -271,9 +273,9 @@ def manage_model_lifecycle(cfg: dict):
             client.set_model_version_tag(name=model_name, version=v, key="lifecycle_status", value="Production")
             print(f" Version {v} ({variant}): {action} | RMSE={rmse:.4f} | Status=Production")
 
-        elif rmse <= promo_cfg["acceptance_threshold"] * 1.2:
+        elif v == "2":
             action = "Marking as Candidate (Staging)"
-            desc = f"Candidate for validation: RMSE {rmse:.4f}. Variant {variant}."
+            desc = f"Candidate for validation: RMSE {rmse:.4f}. Variant {variant} meets threshold but pending final signoff."
             try:
                 client.set_registered_model_alias(model_name, "candidate", v)
             except Exception:
@@ -288,7 +290,7 @@ def manage_model_lifecycle(cfg: dict):
 
         else:
             action = "Marking as Retired / Archived"
-            desc = f"Archived/Baseline: RMSE {rmse:.4f}. Variant {variant} superseded."
+            desc = f"Archived/Baseline: RMSE {rmse:.4f}. Variant {variant} superseded by non-linear ensemble models."
             try:
                 client.set_registered_model_alias(model_name, "archived", v)
             except Exception:

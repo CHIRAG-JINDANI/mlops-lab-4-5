@@ -90,8 +90,10 @@ def plot_feature_importance(model, feature_names, output_path: str = "reports/fi
 
 def evaluate_model_uri(model_uri: str, data_path: str = "data/dataset.csv", target_col: str = "MedHouseVal"):
     """Load model from MLflow URI and evaluate on the dataset."""
+    import mlflow
     import mlflow.pyfunc
 
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
     df = pd.read_csv(data_path)
     X = df.drop(columns=[target_col])
     y = df[target_col]

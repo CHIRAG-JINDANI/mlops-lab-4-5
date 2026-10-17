@@ -19,6 +19,8 @@ mlartifacts/
 .dvc/cache/
 .dvc/tmp/
 .cache/
+data/.cache_sklearn/
+
 
 
 # OS artifacts

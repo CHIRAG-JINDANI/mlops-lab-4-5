@@ -11,7 +11,9 @@ from sklearn.datasets import fetch_california_housing
 def generate_v1(output_path: str = "data/dataset.csv") -> pd.DataFrame:
     """Download baseline California Housing dataset and save to CSV."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    housing = fetch_california_housing(as_frame=True)
+    local_data_home = os.path.abspath("data/.cache_sklearn")
+    os.makedirs(local_data_home, exist_ok=True)
+    housing = fetch_california_housing(data_home=local_data_home, as_frame=True)
     df = housing.frame.copy()
     df.to_csv(output_path, index=False)
     print(f"[v1] Baseline dataset generated at '{output_path}': {len(df)} rows, {len(df.columns)} columns.")

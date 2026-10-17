@@ -1,0 +1,19 @@
+{
+  "candidate": "v3_gradient_boosting",
+  "model_type": "GradientBoostingRegressor",
+  "test_metrics": {
+    "mae": 0.31754486616401906,
+    "mse": 0.22872439909336992,
+    "rmse": 0.47825139737733113,
+    "r2_score": 0.8271500367418624
+  },
+  "train_metrics": {
+    "mae": 0.26716170320137195,
+    "mse": 0.14433954141832606,
+    "rmse": 0.37992044090615346,
+    "r2_score": 0.8916802048969272
+  },
+  "git_commit": "666c6cd8204c03ae33546720b162db4fbdc6bca2",
+  "dvc_hash": "5968e75c88d31ad1a1083b00d57fba4e",
+  "dataset_rows": 20740
+}

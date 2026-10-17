@@ -1,0 +1,19 @@
+{
+  "candidate": "v2_random_forest",
+  "model_type": "RandomForestRegressor",
+  "test_metrics": {
+    "mae": 0.3639348993177804,
+    "mse": 0.294592205694473,
+    "rmse": 0.54276348964763,
+    "r2_score": 0.7773728901146366
+  },
+  "train_metrics": {
+    "mae": 0.29558508386500193,
+    "mse": 0.17674267066920374,
+    "rmse": 0.4204077433506711,
+    "r2_score": 0.8673632347398652
+  },
+  "git_commit": "666c6cd8204c03ae33546720b162db4fbdc6bca2",
+  "dvc_hash": "5968e75c88d31ad1a1083b00d57fba4e",
+  "dataset_rows": 20740
+}

@@ -1,0 +1,19 @@
+{
+  "candidate": "v1_ridge",
+  "model_type": "Ridge",
+  "test_metrics": {
+    "mae": 0.5314615848116304,
+    "mse": 0.5669611509936244,
+    "rmse": 0.7529682270810797,
+    "r2_score": 0.571540183266438
+  },
+  "train_metrics": {
+    "mae": 0.5303280996284626,
+    "mse": 0.5193788408652564,
+    "rmse": 0.7206794300278428,
+    "r2_score": 0.6102314787023904
+  },
+  "git_commit": "666c6cd8204c03ae33546720b162db4fbdc6bca2",
+  "dvc_hash": "5968e75c88d31ad1a1083b00d57fba4e",
+  "dataset_rows": 20740
+}

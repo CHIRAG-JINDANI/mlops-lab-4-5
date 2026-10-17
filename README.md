@@ -51,8 +51,8 @@ mlops-lab-4-5/
 
 ```bash
 # Clone the repository
-git clone <repo-url>
-cd <repo-folder>
+git clone https://github.com/CHIRAG-JINDANI/mlops-lab-4-5.git
+cd mlops-lab-4-5
 
 # Create and activate virtual environment (Python 3.12 - 3.14 recommended)
 python3 -m venv .venv

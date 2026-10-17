@@ -6,7 +6,7 @@
 **Roll Number:** 24AI020  
 **Course:** Machine Learning Operations (MLOps)  
 **Date:** October 17, 2026  
-**Repository:** [mlops-lab-4-5](file:///Users/cjdj/labs/sel/4,5)  
+**Repository:** [https://github.com/CHIRAG-JINDANI/mlops-lab-4-5](https://github.com/CHIRAG-JINDANI/mlops-lab-4-5)  
 
 ---
 

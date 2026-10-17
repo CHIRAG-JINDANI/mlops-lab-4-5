@@ -3,7 +3,6 @@
 * **Student:** Chirag Jindani
 * **Roll No:** 24AI020
 * **Course:** Machine Learning Operations (MLOps)
-* **Date:** October 17, 2026
 * **Repository:** [https://github.com/CHIRAG-JINDANI/mlops-lab-4-5](https://github.com/CHIRAG-JINDANI/mlops-lab-4-5)
 
 ---

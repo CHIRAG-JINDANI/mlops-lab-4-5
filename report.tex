@@ -1,0 +1,211 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{microtype}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=teal!80!black,
+    citecolor=teal!80!black,
+    urlcolor=blue!70!black
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small 24AI020 | Chirag Jindani}
+\lhead{\small MLOps Lab 4--5: Advanced MLflow \& DVC}
+\cfoot{\thepage}
+
+\title{\textbf{\Large LAB ASSIGNMENT 4--5 REPORT}\\
+\large Advanced MLflow Experiment Tracking, Model Registry Governance, and Data Versioning with DVC}
+\author{\textbf{Chirag Jindani} \quad (\textbf{Roll No:} 24AI020)\\
+Department of Artificial Intelligence\\
+Course: Machine Learning Operations (MLOps)}
+\date{October 17, 2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+Reproducibility and auditability in production machine learning systems require coordinated versioning across source code, dataset distributions, and serialized model artifacts. This laboratory report investigates the core engineering challenge: \textit{Can another engineer identify the model that was deployed and recover the exact code and dataset version used to create it?} By establishing an integrated MLOps architecture leveraging \textbf{Git} (code and metadata), \textbf{DVC} (content-addressable dataset storage and pipelines), and \textbf{MLflow} (tracking, model signatures, and model registry lifecycle governance), we demonstrate full bidirectional lineage tracking for a California Housing price prediction system across multiple candidate models, dataset revisions, and promotion states.
+\end{abstract}
+
+\vspace{0.5em}
+\hrule
+\vspace{1em}
+
+\section{Introduction \& System Architecture}
+In conventional software engineering, Git snapshots the entire runtime state. In machine learning, code alone is insufficient because models are downstream artifacts of non-deterministic optimization over external data distributions. 
+
+The tri-pillar MLOps architecture implemented in this work resolves this challenge by dividing responsibilities cleanly:
+\begin{enumerate}
+    \item \textbf{Git}: Tracks source code (`src/`), hyperparameters (`configs/config.yaml`), and lightweight metadata pointers (`.dvc`, `dvc.yaml`, `dvc.lock`).
+    \item \textbf{DVC}: Tracks high-volume dataset payloads (`data/dataset.csv`), caching binary content in an external remote storage (`../dvc-storage`) indexed by cryptographic MD5 content hashes.
+    \item \textbf{MLflow}: Tracks experiment runs, logs metrics ($MAE, RMSE, R^2$), visual diagnostic plots, model signatures, and manages operational lifecycle states (`@production`, `@candidate`, `@archived`) in a centralized Model Registry.
+\end{enumerate}
+
+\section{Part A: Advanced MLflow (Lab 4)}
+
+\subsection{A1. Theoretical Research \& Core Concepts}
+\begin{itemize}
+    \item \textbf{Model Signature}: A formal specification defining the expected schema of model inputs and outputs, including column names, primitive data types (e.g., \texttt{double}, \texttt{integer}), and dimensional shapes (scalars or tensors). It enables early schema validation during model serving, catching malformed inference requests before execution reaches internal estimator code.
+    \item \textbf{Artifacts}: Files produced during a run that provide model weights, runtime configurations, or evaluation diagnostics (e.g., \texttt{residuals\_plot.png}, serialized weights \texttt{model.pkl}, environment specifications \texttt{requirements.txt}, and evaluation reports \texttt{evaluation\_report.json}).
+    \item \textbf{Autologging}: Framework-level introspection utilities (e.g., \texttt{mlflow.sklearn.autolog()}) that automatically intercept training loops to record hyperparameters, execution times, and standard metrics. Empirical verification showed it captured standard estimator parameters, but custom operational metrics (DVC hashes, Git commit SHAs, and specific test splits) required hybrid explicit logging.
+    \item \textbf{Model Registry}: A centralized database-backed catalog managing registered model names, versions, metadata, and lifecycle stages. It decouples client-facing serving endpoints from ephemeral run identifiers.
+    \item \textbf{Version vs. Stage / Alias}: A \textit{version} is an immutable, monotonically increasing integer identifying a specific checkpoint. A \textit{stage/alias} is a mutable semantic pointer (e.g., \texttt{@production}, \texttt{@candidate}) communicating current operational readiness.
+\end{itemize}
+
+\subsection{A3. Candidate Model Tracking and Comparison}
+Three candidate regression architectures were evaluated on the California Housing dataset:
+\begin{enumerate}
+    \item \textbf{Candidate 1 (\texttt{v1\_ridge})}: Regularized linear regression baseline ($L_2$ penalty, $\alpha = 1.0$) with feature standardization.
+    \item \textbf{Candidate 2 (\texttt{v2\_random\_forest})}: Random Forest Regressor (100 trees, maximum depth 10) capturing non-linear feature interactions.
+    \item \textbf{Candidate 3 (\texttt{v3\_gradient\_boosting})}: Gradient Boosting Regressor (200 trees, learning rate 0.08, depth 5) minimizing residual variance.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\fbox{\parbox{0.9\textwidth}{\centering \textbf{[SCREENSHOT PLACEHOLDER 1: MLflow UI Experiment Comparison Table]}\\
+\small Open \texttt{http://127.0.0.1:5000}. Capture Experiment \texttt{California\_House\_Price\_Prediction} showing runs \texttt{candidate\_v1\_ridge}, \texttt{candidate\_v2\_random\_forest}, \texttt{candidate\_v3\_gradient\_boosting} with metrics and Git/DVC tags.}}
+\caption{MLflow Tracking UI comparing candidate training runs and metrics.}
+\end{figure}
+
+\subsection{A4. Model Signatures and Input Examples}
+Each candidate model was logged with an explicit signature inferred via \texttt{infer\_signature(X\_train, y\_pred)}:
+\begin{itemize}
+    \item \textbf{Inputs}: 8 features of type \texttt{double} (\texttt{MedInc}, \texttt{HouseAge}, \texttt{AveRooms}, \texttt{AveBedrms}, \texttt{Population}, \texttt{AveOccup}, \texttt{Latitude}, \texttt{Longitude}).
+    \item \textbf{Outputs}: Tensor of type \texttt{float64} with shape $(-1,)$.
+\end{itemize}
+
+\paragraph{Discussion on Schema Enforcement:}
+If a downstream API client supplies only 3 columns or alters a numeric column to a string, MLflow's pyfunc serving handler intercepts the request and throws an HTTP 400 Bad Request error specifying the exact missing/invalid feature. While signatures detect structural and type violations, they \textit{cannot guarantee} protection against semantic anomalies, such as out-of-distribution values (e.g., negative house age), coordinate drift, or data poisoning within valid numerical bounds.
+
+\begin{figure}[htbp]
+\centering
+\fbox{\parbox{0.9\textwidth}{\centering \textbf{[SCREENSHOT PLACEHOLDER 2: MLflow Artifacts \& Model Signature View]}\\
+\small In MLflow UI, open \texttt{candidate\_v3\_gradient\_boosting}. Select the \texttt{model} directory in Artifacts, displaying the Inferred Input/Output Schema and Input Example.}}
+\caption{Inferred model signature and input example recorded in MLflow artifacts.}
+\end{figure}
+
+\subsection{A5 \& A6. Model Registry and Lifecycle Governance}
+All three candidates were registered under the single unified registered model name: \texttt{HousePriceModel}. 
+
+An automated acceptance policy was enforced:
+\[
+\text{Acceptance Rule:} \quad \text{Test RMSE} \le 0.65 \quad \text{and} \quad R^2 \ge 0.70
+\]
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Model Registry Comparison and Lifecycle Promotion Decisions}
+\begin{tabularx}{\textwidth}{c c c c c X l}
+\toprule
+\textbf{Version} & \textbf{Source Run ID} & \textbf{RMSE} & \textbf{MAE} & \textbf{$R^2$} & \textbf{Model Description \& Architecture} & \textbf{Lifecycle Decision} \\
+\midrule
+\textbf{v1} & \texttt{1d0d1063} & 0.7530 & 0.5315 & 0.5715 & Ridge Regression Baseline. High bias, fails threshold. & \textbf{Archived / Retired} \\
+\textbf{v2} & \texttt{6f1b24b2} & 0.5428 & 0.3639 & 0.7774 & Random Forest (100 trees, depth 10). Non-linear spatial partitioning. & \textbf{Staging / Candidate} \\
+\textbf{v3} & \texttt{d5f0fe90} & \textbf{0.4783} & \textbf{0.3175} & \textbf{0.8272} & Gradient Boosting (200 trees, lr 0.08). Lowest residual error. & \textbf{Production} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Critical Thinking: Should the highest-accuracy model always be promoted?}
+No. Solely relying on aggregate RMSE or accuracy introduces substantial risks:
+\begin{enumerate}
+    \item \textbf{Latency \& Resource Footprint}: Deep ensembles may incur high p99 inference latencies, violating real-time production SLAs.
+    \item \textbf{Subgroup Fairness}: Aggregate accuracy can mask severe prediction errors on disadvantaged demographic or geographic subsets.
+    \item \textbf{Robustness \& Overfitting}: Complex models may overfit specific test splits, degrading rapidly under production distribution shifts.
+    \item \textbf{Asymmetric Error Costs}: Severe underestimations in housing appraisal carry different legal and financial liabilities than overestimations.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\fbox{\parbox{0.9\textwidth}{\centering \textbf{[SCREENSHOT PLACEHOLDER 3: MLflow Model Registry Versions Overview]}\\
+\small Open the "Models" tab in MLflow UI. Capture the table showing \texttt{HousePriceModel} with Version 1 (Archived), Version 2 (Staging / Candidate), and Version 3 (Production).}}
+\caption{Model Registry versions and assigned operational lifecycle states.}
+\end{figure}
+
+\section{Part B: Data Versioning with DVC (Lab 5)}
+
+\subsection{B1. Data Versioning Principles}
+Git stores complete delta snapshots in `.git/objects`, causing massive repository bloat when managing binary data or large CSV files. DVC solves this by storing only small ASCII pointer files (`.dvc`) in Git, while moving raw data to content-addressable storage indexed by MD5 hashes.
+
+\subsection{B5 \& B6. Dataset Version Evolution and Recovery Verification}
+Two dataset versions were tracked and verified:
+\begin{itemize}
+    \item \textbf{Dataset v1 (Baseline)}: 20,640 records (1,895,154 bytes, MD5: \texttt{ca5b757f0729c68d74d05bf9d9ca8486}). Committed to Git at \texttt{6767005}.
+    \item \textbf{Dataset v2 (Evolution)}: 20,740 records (1,903,729 bytes, MD5: \texttt{5968e75c88d31ad1a1083b00d57fba4e}) containing 100 new survey samples. Committed to Git at \texttt{666c6cd}.
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Dataset Version Comparison and Restoration Verification}
+\begin{tabularx}{\textwidth}{c c c c X c}
+\toprule
+\textbf{Version} & \textbf{Git Commit} & \textbf{Rows} & \textbf{Cols} & \textbf{Change Description} & \textbf{Restoration Verified?} \\
+\midrule
+\textbf{Dataset v1} & \texttt{6767005} & 20,640 & 9 & Baseline California Housing dataset. & \textbf{Yes} (Verified via \texttt{dvc checkout}) \\
+\textbf{Dataset v2} & \texttt{666c6cd} & 20,740 & 9 & Added 100 survey records with economic jitter. & \textbf{Yes} (Verified via \texttt{dvc checkout}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Verification Methodology:}
+Restoration was verified by checking Git commit \texttt{6767005} on a verification branch, running \texttt{dvc checkout}, and executing line count checks (\texttt{wc -l}) and MD5 checksum comparisons. A filename alone (e.g., \texttt{dataset.csv}) is insufficient to identify a dataset version because file contents can mutate silently without the filename changing; only cryptographic content hashes guarantee immutability.
+
+\subsection{B7. Reproducible DVC Pipelines}
+A multi-stage pipeline was declared in \texttt{dvc.yaml} linking \texttt{data/dataset.csv.dvc} to \texttt{train\_and\_evaluate}. Running \texttt{dvc repro} generates \texttt{dvc.lock}. Subsequent runs skip execution if dependencies and code are unchanged, guaranteeing efficient computational reproducibility.
+
+\section{Part C: Integrated Tri-Pillar Architecture}
+
+\subsection{C1. Comparison of MLOps Tooling}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Comparative Matrix: Git, DVC, and MLflow}
+\begin{tabularx}{\textwidth}{l X X X}
+\toprule
+\textbf{Tool} & \textbf{What it Tracks / Records} & \textbf{Where Information Lives} & \textbf{Why It Matters} \\
+\midrule
+\textbf{Git} & Source code, configurations (\texttt{config.yaml}), `.dvc` pointer files, and pipeline definitions (\texttt{dvc.yaml}). & Local repository (\texttt{.git/}) and remote forge (GitHub). & Ensures code versioning and connects data hashes to pipeline logic. \\
+\textbf{DVC} & Raw datasets, intermediate processed features, and execution dependency DAGs. & Local cache (\texttt{.dvc/cache}) and remote storage (\texttt{../dvc-storage}). & Prevents repository bloat while enabling content-addressable data rollbacks. \\
+\textbf{MLflow} & Experiments, hyperparameters, evaluation metrics ($MAE, RMSE, R^2$), visual plots, signatures, and Model Registry stages. & Database (\texttt{sqlite:///mlflow.db}) and artifact store (\texttt{mlartifacts/}). & Manages model governance, audit logging, and decoupled operational promotion. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{C2. Anomaly Investigation \& Prediction Lineage Walkthrough}
+When an anomalous prediction is flagged in production:
+\begin{enumerate}
+    \item \textbf{Identify Production Model}: Query MLflow for \texttt{models:/HousePriceModel@production}, returning Version 3 (Run ID \texttt{d5f0fe90}).
+    \item \textbf{Inspect Audit Tags}: Extract \texttt{git\_commit\_sha} (\texttt{666c6cd8}) and \texttt{dvc\_dataset\_hash} (\texttt{5968e75c}).
+    \item \textbf{Reconstitute Code}: Execute \texttt{git checkout 666c6cd8}.
+    \item \textbf{Reconstitute Data}: Execute \texttt{dvc checkout}, instantly restoring the exact 20,740 rows used for training.
+    \item \textbf{Reproduce & Debug}: Evaluate predictions locally, reproducing the exact weights, features, and environment without discrepancy.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\fbox{\parbox{0.9\textwidth}{\centering \textbf{[SCREENSHOT PLACEHOLDER 4: MLflow Run Tags Displaying Git and DVC Audit Hashes]}\\
+\small In MLflow UI, expand the Tags section of Run \texttt{candidate\_v3\_gradient\_boosting}. Display \texttt{git\_commit\_sha}, \texttt{dvc\_dataset\_hash}, \texttt{model\_variant}, and \texttt{dataset\_rows}.}}
+\caption{Audit tags binding Git commit SHA and DVC data hash to MLflow run.}
+\end{figure}
+
+\section{Conclusion}
+This assignment demonstrates that full reproducibility in modern machine learning systems requires strict decoupling and synchronization across source code, dataset snapshots, and model lifecycle metadata. By binding Git commit hashes and DVC content checksums directly into MLflow Model Registry tags, ML engineering teams achieve complete traceability, streamlined rollback mechanisms, and robust production governance.
+
+\end{document}
